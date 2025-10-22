@@ -1,22 +1,18 @@
-name: Build and Deploy AMAP Tile Proxy
+name: Build and Push to Docker Hub
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main ]
   pull_request:
     branches: [ main ]
 
 env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  REGISTRY: docker.io
+  IMAGE_NAME: amap-tile-proxy
 
 jobs:
-  build:
+  build-and-push:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
@@ -24,84 +20,40 @@ jobs:
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
 
-    - name: Log in to GitHub Container Registry
+    - name: Log in to Docker Hub
       uses: docker/login-action@v3
       with:
-        registry: ${{ env.REGISTRY }}
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-    - name: Extract metadata
-      id: meta
-      uses: docker/metadata-action@v5
-      with:
-        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-        tags: |
-          type=ref,event=branch
-          type=ref,event=pr
-          type=sha,prefix=
-
-    - name: Build and push Docker image
+    - name: Build and push AMD64 image
       uses: docker/build-push-action@v5
       with:
         context: .
-        platforms: linux/amd64,linux/arm64
-        push: true
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
+        platforms: linux/amd64
+        push: ${{ github.event_name != 'pull_request' }}
+        tags: |
+          ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest
+          ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:amd64
         cache-from: type=gha
         cache-to: type=gha,mode=max
 
-  deploy-x86:
-    needs: build
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
-    
-    steps:
-    - name: Deploy to x86 Server
-      uses: appleboy/ssh-action@v1.0.3
+    - name: Build and push ARM64 image
+      uses: docker/build-push-action@v5
       with:
-        host: ${{ secrets.X86_SERVER_IP }}
-        username: ${{ secrets.X86_SERVER_USER }}
-        key: ${{ secrets.X86_SSH_PRIVATE_KEY }}
-        port: ${{ secrets.X86_SSH_PORT || 22 }}
-        script: |
-          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          docker stop amap-proxy || true
-          docker rm amap-proxy || true
-          docker pull ghcr.io/${{ github.repository }}:main
-          docker run -d \
-            --name amap-proxy \
-            --restart unless-stopped \
-            -p 8280:8080 \
-            -e LOG_LEVEL=INFO \
-            ghcr.io/${{ github.repository }}:main
-          sleep 10
-          curl -f http://localhost:8280/health && echo "✅ 服务启动成功"
+        context: .
+        platforms: linux/arm64
+        push: ${{ github.event_name != 'pull_request' }}
+        tags: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:arm64
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
 
-  deploy-arm:
-    needs: build
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
-    
-    steps:
-    - name: Deploy to ARM Server
-      uses: appleboy/ssh-action@v1.0.3
-      with:
-        host: ${{ secrets.ARM_SERVER_IP }}
-        username: ${{ secrets.ARM_SERVER_USER }}
-        key: ${{ secrets.ARM_SSH_PRIVATE_KEY }}
-        port: ${{ secrets.ARM_SSH_PORT || 22 }}
-        script: |
-          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          docker stop amap-proxy || true
-          docker rm amap-proxy || true
-          docker pull ghcr.io/${{ github.repository }}:main
-          docker run -d \
-            --name amap-proxy \
-            --restart unless-stopped \
-            -p 8280:8080 \
-            -e LOG_LEVEL=INFO \
-            ghcr.io/${{ github.repository }}:main
-          sleep 10
-          curl -f http://localhost:8280/health && echo "✅ 服务启动成功"
+    - name: Verify pushed images
+      run: |
+        echo "✅ 镜像构建和推送完成！"
+        echo "🐳 镜像地址: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}"
+        echo "🏷️  可用标签: latest, amd64, arm64"
+        echo ""
+        echo "使用命令:"
+        echo "  x86服务器: docker pull ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:amd64"
+        echo "  ARM服务器: docker pull ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:arm64"

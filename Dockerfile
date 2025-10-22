@@ -2,23 +2,29 @@ FROM python:3.9-alpine
 
 WORKDIR /app
 
-RUN apk add --no-cache \
+# 安装系统依赖
+RUN apk update && apk add --no-cache \
+    curl \
     gcc \
     musl-dev \
-    linux-headers \
-    libffi-dev \
     jpeg-dev \
     zlib-dev
 
+# 复制依赖文件
 COPY requirements.txt .
 
+# 安装Python依赖
 RUN pip install --no-cache-dir -r requirements.txt
 
+# 验证安装
+RUN python -c "import flask; import requests; from PIL import Image; print('✅ 所有依赖安装成功')"
+
+# 复制应用代码
 COPY app.py .
 
-RUN adduser -D -s /bin/sh amapuser
-USER amapuser
-
 EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+  CMD curl -f http://localhost:8080/health || exit 1
 
 CMD ["python", "app.py"]
