@@ -1,0 +1,29 @@
+services:
+  amap-proxy:
+    image: imno9999/amap-tile-proxy:amd64
+    container_name: amap-proxy
+    restart: unless-stopped
+    environment:
+      - LOG_LEVEL=INFO
+      - CACHE_ENABLED=true
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - traefik_default
+    ports:
+      - "8280:8080"
+    # volumes:
+    #   - amap-cache:/tmp/cache
+
+networks:
+  traefik_default:
+    external: true
