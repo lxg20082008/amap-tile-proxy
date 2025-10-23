@@ -14,7 +14,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 下载GeoIP数据库
 RUN wget -O /app/GeoLite2-City.mmdb "https://git.io/GeoLite2-City.mmdb" || echo "GeoIP download failed, will use fallback"
 
-# 验证安装
+# 验证安装（更新为实际使用的依赖）
 RUN python -c "import flask; import requests; import geoip2.database; print('✅ 所有依赖安装成功')"
 
 # 复制应用代码

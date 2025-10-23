@@ -3,10 +3,9 @@ import requests
 from io import BytesIO
 import math
 import logging
-import json
 import geoip2.database
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -74,9 +73,6 @@ PRESET_LOCATIONS = {
     "tokyo": {"name": "东京", "lng": 139.6917, "lat": 35.6895, "country": "日本"}
 }
 
-# 用户位置缓存（模拟浏览器的位置记忆）
-user_location_cache = {}
-
 class LocationService:
     def __init__(self):
         self.geoip_reader = None
@@ -100,6 +96,11 @@ class LocationService:
             return None
             
         try:
+            # 检查是否是内网IP
+            if ip_address.startswith(('10.', '172.16.', '192.168.', '127.')):
+                logger.info(f"内网IP {ip_address}，跳过IP定位")
+                return None
+                
             response = self.geoip_reader.city(ip_address)
             return {
                 'lng': response.location.longitude,
@@ -142,15 +143,16 @@ class LocationService:
         if html5_location:
             return html5_location
         
-        # 2. IP定位（备用）
-        ip_location = self.get_location_by_ip(client_ip)
-        if ip_location:
-            return ip_location
+        # 2. IP定位（备用）- 跳过内网IP
+        if not client_ip.startswith(('10.', '172.16.', '192.168.', '127.')):
+            ip_location = self.get_location_by_ip(client_ip)
+            if ip_location:
+                return ip_location
         
         # 3. 默认位置（保底）
         return self.get_default_location()
 
-# 这一行必须保留 - 创建全局定位服务实例
+# 创建全局定位服务实例
 location_service = LocationService()
 
 @app.route("/")
@@ -218,9 +220,6 @@ def index():
                     <option value="guangzhou">广州</option>
                     <option value="shenzhen">深圳</option>
                     <option value="hangzhou">杭州</option>
-                    <option value="newyork">纽约</option>
-                    <option value="london">伦敦</option>
-                    <option value="tokyo">东京</option>
                 </select>
                 <button class="btn" onclick="setManualLocation()">确认选择</button>
             </div>
@@ -429,23 +428,39 @@ def index():
     </html>
     """
 
+@app.route("/debug/tile/<int:z>/<int:x>/<int:y>")
+def debug_tile(z, x, y):
+    """调试接口，显示坐标转换信息"""
+    try:
+        # 获取客户端IP和位置
+        client_ip = location_service.get_client_ip()
+        base_location = location_service.determine_best_location(client_ip)
+        
+        # 坐标转换计算
+        wgs84_lng, wgs84_lat = tile_to_lnglat(x, y, z)
+        gcj_lng, gcj_lat = wgs84_to_gcj02(wgs84_lng, wgs84_lat)
+        gcj_x, gcj_y = lnglat_to_tile(gcj_lng, gcj_lat, z)
+        
+        return {
+            "client_ip": client_ip,
+            "base_location": base_location,
+            "original_tile": {"z": z, "x": x, "y": y},
+            "wgs84_coord": {"lng": round(wgs84_lng, 6), "lat": round(wgs84_lat, 6)},
+            "gcj02_coord": {"lng": round(gcj_lng, 6), "lat": round(gcj_lat, 6)},
+            "gcj02_tile": {"z": z, "x": gcj_x, "y": gcj_y},
+            "server_number": (gcj_x + gcj_y) % 4
+        }
+    except Exception as e:
+        return {"error": str(e)}, 500
+
 # API路由
 @app.route("/api/auto-location")
 def auto_location():
     """自动定位接口"""
     client_ip = location_service.get_client_ip()
     
-    # 检查是否有HTML5定位数据
-    html5_location = None
-    if request.args.get('lat') and request.args.get('lng'):
-        html5_location = {
-            'lat': float(request.args.get('lat')),
-            'lng': float(request.args.get('lng')),
-            'accuracy': float(request.args.get('accuracy', 0))
-        }
-    
     # 确定最佳位置
-    location = location_service.determine_best_location(client_ip, html5_location)
+    location = location_service.determine_best_location(client_ip)
     
     logger.info(f"自动定位 - IP: {client_ip}, 位置: {location}")
     
@@ -458,7 +473,6 @@ def save_location():
         data = request.json
         client_ip = location_service.get_client_ip()
         
-        # 这里可以保存到数据库或文件
         logger.info(f"保存位置 - IP: {client_ip}, 位置: {data}")
         
         return jsonify({"status": "success", "message": "位置已保存"})
@@ -481,6 +495,8 @@ def get_tile(z, x, y):
         base_lng = base_location['lng']
         base_lat = base_location['lat']
         
+        logger.info(f"请求瓦片: z={z}, x={x}, y={y}, 基准位置: {base_location}")
+        
         # 计算瓦片中心坐标
         tile_center_lng, tile_center_lat = tile_to_lnglat(x, y, z)
         
@@ -495,22 +511,29 @@ def get_tile(z, x, y):
         gcj_lng, gcj_lat = wgs84_to_gcj02(target_lng, target_lat)
         gcj_x, gcj_y = lnglat_to_tile(gcj_lng, gcj_lat, z)
         
-        # 请求高德瓦片
+        # 请求高德瓦片 - 使用HTTP而不是HTTPS
         server_num = (gcj_x + gcj_y) % 4
-        url = f"https://{AMAP_SERVERS[server_num]}/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={gcj_x}&y={gcj_y}&z={z}"
+        url = f"http://webrd0{server_num+1}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={gcj_x}&y={gcj_y}&z={z}"
+        
+        logger.info(f"请求高德瓦片: {url}")
         
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Referer": "https://www.amap.com/"
         }
         
-        r = requests.get(url, headers=headers, timeout=10)
+        # 增加超时时间
+        r = requests.get(url, headers=headers, timeout=15)
         
-        if r.status_code == 200:
+        if r.status_code == 200 and len(r.content) > 1000:  # 检查内容长度
             return send_file(BytesIO(r.content), mimetype="image/jpeg")
         else:
+            logger.warning(f"瓦片获取失败: 状态码={r.status_code}, 长度={len(r.content)}")
             return Response("Tile not found", status=404)
             
+    except requests.exceptions.RequestException as e:
+        logger.error(f"网络请求失败: {e}")
+        return Response("Network error", status=503)
     except Exception as e:
         logger.error(f"获取瓦片失败: {e}")
         return Response("Service error", status=500)
@@ -520,4 +543,4 @@ def health():
     return "OK"
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8280, debug=True)
+    app.run(host="0.0.0.0", port=8280, debug=False)
