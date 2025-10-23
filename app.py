@@ -85,20 +85,12 @@ class LocationService:
     def init_geoip(self):
         """初始化IP地理定位数据库"""
         try:
-            # 尝试加载GeoIP数据库
-            db_paths = [
-                "GeoLite2-City.mmdb",
-                "/usr/share/GeoIP/GeoLite2-City.mmdb",
-                "/var/lib/GeoIP/GeoLite2-City.mmdb"
-            ]
-            
-            for db_path in db_paths:
-                if os.path.exists(db_path):
-                    self.geoip_reader = geoip2.database.Reader(db_path)
-                    logger.info(f"GeoIP数据库加载成功: {db_path}")
-                    return
-            
-            logger.warning("未找到GeoIP数据库，将使用备用定位方案")
+            db_path = "/app/GeoLite2-City.mmdb"
+            if os.path.exists(db_path):
+                self.geoip_reader = geoip2.database.Reader(db_path)
+                logger.info("GeoIP数据库加载成功")
+            else:
+                logger.warning("未找到GeoIP数据库，将使用备用定位方案")
         except Exception as e:
             logger.error(f"GeoIP数据库加载失败: {e}")
     
@@ -120,73 +112,45 @@ class LocationService:
             logger.warning(f"IP定位失败 {ip_address}: {e}")
             return None
     
-    def get_location_by_html5(self, client_data):
-        """处理HTML5 Geolocation API提供的位置"""
-        try:
-            lat = client_data.get('lat')
-            lng = client_data.get('lng')
-            accuracy = client_data.get('accuracy', 0)
-            
-            if lat and lng:
-                return {
-                    'lng': lng,
-                    'lat': lat,
-                    'accuracy': accuracy,
-                    'source': 'html5_geolocation',
-                    'timestamp': datetime.now().isoformat()
-                }
-        except Exception as e:
-            logger.error(f"HTML5位置解析失败: {e}")
-        return None
+    def get_default_location(self):
+        """获取默认位置"""
+        default_loc = PRESET_LOCATIONS['beijing'].copy()
+        default_loc['source'] = 'default'
+        return default_loc
     
     def get_client_ip(self):
         """获取客户端真实IP（处理代理情况）"""
-        # 检查常见的代理头
         proxy_headers = [
             'X-Forwarded-For',
             'X-Real-IP', 
             'X-Client-IP',
-            'CF-Connecting-IP',  # Cloudflare
-            'True-Client-IP'     # Akamai
+            'CF-Connecting-IP',
+            'True-Client-IP'
         ]
         
         for header in proxy_headers:
             ip = request.headers.get(header)
             if ip:
-                # 处理多个IP的情况（如 X-Forwarded-For: client, proxy1, proxy2）
                 ips = [ip.strip() for ip in ip.split(',')]
-                return ips[0]  # 第一个IP是客户端真实IP
+                return ips[0]
         
-        # 如果没有代理头，使用远程地址
         return request.remote_addr
     
     def determine_best_location(self, client_ip, html5_location=None):
-        """确定最佳位置（混合定位策略）"""
-        locations = []
-        
+        """确定最佳位置"""
         # 1. HTML5定位（最高优先级）
         if html5_location:
-            locations.append(html5_location)
+            return html5_location
         
-        # 2. IP定位
+        # 2. IP定位（备用）
         ip_location = self.get_location_by_ip(client_ip)
         if ip_location:
-            locations.append(ip_location)
+            return ip_location
         
-        # 3. 选择最佳位置
-        if locations:
-            # 优先使用HTML5定位（更精确）
-            for loc in locations:
-                if loc.get('source') == 'html5_geolocation':
-                    return loc
-            # 否则使用IP定位
-            return locations[0]
-        
-        # 4. 默认位置（北京）
-        default_loc = PRESET_LOCATIONS['beijing'].copy()
-        default_loc['source'] = 'default'
-        return default_loc
+        # 3. 默认位置（保底）
+        return self.get_default_location()
 
+# 这一行必须保留 - 创建全局定位服务实例
 location_service = LocationService()
 
 @app.route("/")
