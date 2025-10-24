@@ -67,10 +67,7 @@ PRESET_LOCATIONS = {
     "shanghai": {"name": "上海", "lng": 121.4737, "lat": 31.2304, "country": "中国"},
     "guangzhou": {"name": "广州", "lng": 113.2644, "lat": 23.1291, "country": "中国"},
     "shenzhen": {"name": "深圳", "lng": 114.0579, "lat": 22.5431, "country": "中国"},
-    "hangzhou": {"name": "杭州", "lng": 120.1551, "lat": 30.2741, "country": "中国"},
-    "newyork": {"name": "纽约", "lng": -74.0060, "lat": 40.7128, "country": "美国"},
-    "london": {"name": "伦敦", "lng": -0.1276, "lat": 51.5074, "country": "英国"},
-    "tokyo": {"name": "东京", "lng": 139.6917, "lat": 35.6895, "country": "日本"}
+    "hangzhou": {"name": "杭州", "lng": 120.1551, "lat": 30.2741, "country": "中国"}
 }
 
 class LocationService:
